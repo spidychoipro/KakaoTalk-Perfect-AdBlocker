@@ -1,0 +1,16 @@
+
+# KakaoTalk AdBlock 2026 (Copy these to hosts file)
+127.0.0.1  display.ad.daum.net
+127.0.0.1  ad.kakaocdn.net
+127.0.0.1  ad.kakaocdn.com
+127.0.0.1  ad.kakao.com
+127.0.0.1  ad.ad-stir.com
+127.0.0.1  adimg.imkakao.com
+127.0.0.1  adimg.daumcdn.net
+127.0.0.1  adimg1.kakaocdn.net
+127.0.0.1  adimg2.kakaocdn.net
+127.0.0.1  adimg3.kakaocdn.net
+127.0.0.1  shortformstats.kakao.com
+127.0.0.1  play.kakao.com
+127.0.0.1  ik.kakaocdn.net
+127.0.0.1  talk-pilsner.kakao.com
