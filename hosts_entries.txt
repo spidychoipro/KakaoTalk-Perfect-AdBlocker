@@ -1,6 +1,10 @@
 
 # KakaoTalk AdBlock 2026 (Copy these to hosts file)
 127.0.0.1  display.ad.daum.net
+127.0.0.1  kyson.ad.daum.net
+127.0.0.1  analytics.ad.daum.net
+127.0.0.1  wat.ad.daum.net
+127.0.0.1  keyword.ad.daum.net
 127.0.0.1  ad.kakaocdn.net
 127.0.0.1  ad.kakaocdn.com
 127.0.0.1  ad.kakao.com

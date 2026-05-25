@@ -10,7 +10,8 @@ Windows용 카카오톡 PC 광고 차단 도구입니다.
 
 - 광고 도메인을 `hosts` 파일로 차단합니다.
 - 카카오톡 창 안에 남는 광고용 빈 영역을 백그라운드 스크립트가 숨깁니다.
-- `setup_adblock.bat` 실행 한 번으로 스크립트를 시작 프로그램에 등록합니다.
+- 카카오톡 메인 창이 닫혀 있거나 트레이에 있어도 우측 하단 팝업 광고를 감지해 숨깁니다.
+- `setup_adblock.bat` 실행 한 번으로 스크립트를 시작 프로그램에 등록하고 바로 실행합니다.
 - 별도 Python 패키지를 설치하지 않습니다. Python 표준 라이브러리만 사용합니다.
 
 ## 지원 환경
@@ -40,10 +41,12 @@ git clone https://github.com/spidychoipro/KakaoTalk-Perfect-AdBlocker.git
 이 배치 파일은 다음 작업을 수행합니다.
 
 - `kakaotalk_adblock.py`를 `%USERPROFILE%\KakaoAdBlock` 폴더로 복사
+- 기존에 실행 중이던 예전 광고 차단 프로세스 종료
 - Windows 시작 프로그램 폴더에 `KakaoAdBlock.lnk` 바로가기 생성
+- 새 광고 차단 스크립트 즉시 실행
 - 다음 로그인부터 광고 영역 숨김 스크립트 자동 실행
 
-바로 적용하고 싶다면 `Win + R`을 누른 뒤 `shell:startup`을 입력하고, 생성된 `KakaoAdBlock` 바로가기를 한 번 실행해 주세요.
+이미 예전 버전을 설치했다면 최신 파일을 받은 뒤 `setup_adblock.bat`를 다시 실행해 주세요. 그래야 `%USERPROFILE%\KakaoAdBlock` 안의 백그라운드 스크립트가 새 버전으로 교체됩니다.
 
 ### 3. 광고 도메인 차단
 
@@ -68,8 +71,8 @@ git clone https://github.com/spidychoipro/KakaoTalk-Perfect-AdBlocker.git
 | 구성 파일 | 역할 |
 | --- | --- |
 | `hosts_entries.txt` | 알려진 카카오톡 광고 도메인을 `127.0.0.1`로 돌려 광고 데이터를 받지 못하게 합니다. |
-| `kakaotalk_adblock.py` | Windows 창 API를 사용해 카카오톡 광고 영역으로 보이는 창을 찾아 숨깁니다. |
-| `setup_adblock.bat` | Python 스크립트를 사용자 폴더로 복사하고 시작 프로그램에 등록합니다. |
+| `kakaotalk_adblock.py` | Windows 창 API를 사용해 카카오톡 하단 배너와 우측 하단 팝업 광고 창을 찾아 숨깁니다. |
+| `setup_adblock.bat` | Python 스크립트를 사용자 폴더로 복사하고 시작 프로그램에 등록한 뒤 즉시 실행합니다. |
 
 ## 삭제 방법
 
@@ -92,7 +95,8 @@ Python이 PATH에 등록되지 않은 상태입니다. Python 설치 프로그�
 - `hosts` 파일이 관리자 권한으로 저장되었는지 확인해 주세요.
 - `hosts_entries.txt`의 내용이 `hosts` 파일 맨 아래에 들어갔는지 확인해 주세요.
 - 카카오톡을 트레이 아이콘까지 완전히 종료한 뒤 다시 실행해 주세요.
-- 바로 적용하려면 `shell:startup`에서 `KakaoAdBlock` 바로가기를 실행해 주세요.
+- 예전 버전이 설치되어 있었다면 최신 파일로 받은 뒤 `setup_adblock.bat`를 다시 실행해 주세요.
+- 진단이 필요하면 터미널에서 `python kakaotalk_adblock.py --once --debug`를 실행하면 감지 결과를 볼 수 있습니다.
 
 ### 카카오톡 업데이트 후 다시 보일 때
 
