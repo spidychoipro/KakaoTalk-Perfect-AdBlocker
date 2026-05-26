@@ -17,11 +17,20 @@ SWP_NOSIZE = 0x0001
 SWP_NOZORDER = 0x0004
 SWP_NOACTIVATE = 0x0010
 SWP_HIDEWINDOW = 0x0080
+WM_CLOSE = 0x0010
+
+EVENT_SYSTEM_FOREGROUND = 0x0003
+EVENT_OBJECT_SHOW = 0x8002
+OBJID_WINDOW = 0
+WINEVENT_OUTOFCONTEXT = 0x0000
+PM_REMOVE = 0x0001
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 MONITOR_DEFAULTTONEAREST = 2
 ERROR_ALREADY_EXISTS = 183
 MUTEX_NAME = "Local\\KakaoTalkPerfectAdBlocker"
+DEFAULT_SCAN_INTERVAL = 0.1
+MIN_EVENT_PUMP_INTERVAL = 0.02
 
 KAKAO_PROCESS = "kakaotalk.exe"
 KAKAO_WINDOW_CLASSES = {
@@ -68,7 +77,28 @@ class MONITORINFO(ctypes.Structure):
     )
 
 
+class MSG(ctypes.Structure):
+    _fields_ = (
+        ("hwnd", wintypes.HWND),
+        ("message", wintypes.UINT),
+        ("wParam", wintypes.WPARAM),
+        ("lParam", wintypes.LPARAM),
+        ("time", wintypes.DWORD),
+        ("pt", wintypes.POINT),
+    )
+
+
 EnumProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+WinEventProc = ctypes.WINFUNCTYPE(
+    None,
+    wintypes.HANDLE,
+    wintypes.DWORD,
+    wintypes.HWND,
+    ctypes.c_long,
+    ctypes.c_long,
+    wintypes.DWORD,
+    wintypes.DWORD,
+)
 
 user32.EnumWindows.argtypes = (EnumProc, wintypes.LPARAM)
 user32.EnumWindows.restype = wintypes.BOOL
@@ -88,6 +118,13 @@ user32.GetWindowThreadProcessId.argtypes = (wintypes.HWND, ctypes.POINTER(wintyp
 user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 user32.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
 user32.ShowWindow.restype = wintypes.BOOL
+user32.PostMessageW.argtypes = (
+    wintypes.HWND,
+    wintypes.UINT,
+    wintypes.WPARAM,
+    wintypes.LPARAM,
+)
+user32.PostMessageW.restype = wintypes.BOOL
 user32.SetWindowPos.argtypes = (
     wintypes.HWND,
     wintypes.HWND,
@@ -98,6 +135,30 @@ user32.SetWindowPos.argtypes = (
     ctypes.c_uint,
 )
 user32.SetWindowPos.restype = wintypes.BOOL
+user32.SetWinEventHook.argtypes = (
+    wintypes.DWORD,
+    wintypes.DWORD,
+    wintypes.HMODULE,
+    WinEventProc,
+    wintypes.DWORD,
+    wintypes.DWORD,
+    wintypes.DWORD,
+)
+user32.SetWinEventHook.restype = wintypes.HANDLE
+user32.UnhookWinEvent.argtypes = (wintypes.HANDLE,)
+user32.UnhookWinEvent.restype = wintypes.BOOL
+user32.PeekMessageW.argtypes = (
+    ctypes.POINTER(MSG),
+    wintypes.HWND,
+    wintypes.UINT,
+    wintypes.UINT,
+    wintypes.UINT,
+)
+user32.PeekMessageW.restype = wintypes.BOOL
+user32.TranslateMessage.argtypes = (ctypes.POINTER(MSG),)
+user32.TranslateMessage.restype = wintypes.BOOL
+user32.DispatchMessageW.argtypes = (ctypes.POINTER(MSG),)
+user32.DispatchMessageW.restype = wintypes.LPARAM
 user32.MonitorFromWindow.argtypes = (wintypes.HWND, wintypes.DWORD)
 user32.MonitorFromWindow.restype = wintypes.HMONITOR
 user32.GetMonitorInfoW.argtypes = (wintypes.HMONITOR, ctypes.POINTER(MONITORINFO))
@@ -255,6 +316,14 @@ def has_ad_text(info):
     return any(keyword.lower() in haystack for keyword in AD_TEXT_KEYWORDS)
 
 
+def has_ad_descendant_text(hwnd):
+    for child_hwnd in enum_child_windows(hwnd):
+        haystack = f"{get_window_class(child_hwnd)} {get_window_text(child_hwnd)}".lower()
+        if any(keyword.lower() in haystack for keyword in AD_TEXT_KEYWORDS):
+            return True
+    return False
+
+
 def has_safe_text(info):
     return any(keyword in info.text for keyword in SAFE_TEXT_KEYWORDS)
 
@@ -303,8 +372,19 @@ def is_bottom_right_popup_ad(info):
     )
     near_corner = -32 <= gap_right <= 180 and -32 <= gap_bottom <= 180
     popup_size = 240 <= info.width <= 560 and 150 <= info.height <= 430
+    marked_popup_size = 220 <= info.width <= 640 and 120 <= info.height <= 520
+    marked_popup = (
+        has_ad_descendant_text(info.hwnd)
+        and inside_work_area
+        and near_corner
+        and marked_popup_size
+    )
 
-    return has_ad_text(info) or (inside_work_area and near_corner and popup_size)
+    return (
+        has_ad_text(info)
+        or marked_popup
+        or (inside_work_area and near_corner and popup_size)
+    )
 
 
 def is_bottom_banner_ad(info, main):
@@ -333,14 +413,14 @@ def is_bottom_banner_ad(info, main):
         and height_ratio <= 0.45
     )
 
-    if has_ad_text(info):
+    if has_ad_text(info) or has_ad_descendant_text(info.hwnd):
         return bottom_aligned and banner_size
 
     # Fallback for ad containers that expose no window title at all.
     return bottom_aligned and lower_half and banner_size and info.height >= 75
 
 
-def hide_window(info, reason, debug=False):
+def hide_window(info, reason, debug=False, close=False):
     user32.ShowWindow(info.hwnd, SW_HIDE)
     user32.SetWindowPos(
         info.hwnd,
@@ -351,6 +431,8 @@ def hide_window(info, reason, debug=False):
         0,
         SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
     )
+    if close:
+        user32.PostMessageW(info.hwnd, WM_CLOSE, 0, 0)
     if debug:
         print(
             f"hidden {reason}: hwnd={info.hwnd:#x} class={info.cls!r} "
@@ -364,7 +446,7 @@ def scan_once(debug=False):
 
     for info in top_level_infos:
         if is_bottom_right_popup_ad(info):
-            hide_window(info, "popup", debug)
+            hide_window(info, "popup", debug, close=True)
             hidden += 1
 
     main_windows = [info for info in top_level_infos if is_probable_main_window(info)]
@@ -379,6 +461,85 @@ def scan_once(debug=False):
         print("no ad windows found")
 
     return hidden
+
+
+def handle_window_event(hwnd, debug=False):
+    if not hwnd:
+        return False
+
+    info = get_window_info(hwnd)
+    if not is_kakao_window(info):
+        return False
+
+    if is_bottom_right_popup_ad(info):
+        hide_window(info, "popup-event", debug, close=True)
+        return True
+
+    main_windows = [
+        main
+        for main in (get_window_info(parent) for parent in enum_windows())
+        if is_probable_main_window(main)
+    ]
+    for main in main_windows:
+        if info.hwnd != main.hwnd and is_bottom_banner_ad(info, main):
+            hide_window(info, "banner-event", debug)
+            return True
+
+    return False
+
+
+def install_event_hooks(debug=False):
+    def callback(_hook, event, hwnd, object_id, child_id, _thread, _time):
+        if object_id != OBJID_WINDOW or child_id != 0:
+            return
+        try:
+            handle_window_event(hwnd, debug)
+        except Exception as exc:
+            if debug:
+                print(f"event hook error: {exc!r}")
+
+    event_proc = WinEventProc(callback)
+    hooks = []
+
+    for event in (EVENT_OBJECT_SHOW, EVENT_SYSTEM_FOREGROUND):
+        hook = user32.SetWinEventHook(
+            event,
+            event,
+            None,
+            event_proc,
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT,
+        )
+        if hook:
+            hooks.append(hook)
+
+    if debug:
+        print(f"installed {len(hooks)} window event hook(s)")
+
+    return hooks, event_proc
+
+
+def uninstall_event_hooks(hooks):
+    for hook in hooks:
+        user32.UnhookWinEvent(hook)
+
+
+def pump_window_events():
+    msg = MSG()
+    while user32.PeekMessageW(ctypes.byref(msg), 0, 0, 0, PM_REMOVE):
+        user32.TranslateMessage(ctypes.byref(msg))
+        user32.DispatchMessageW(ctypes.byref(msg))
+
+
+def sleep_with_event_pump(duration):
+    end_time = time.monotonic() + duration
+    while True:
+        pump_window_events()
+        remaining = end_time - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(MIN_EVENT_PUMP_INTERVAL, remaining))
 
 
 def create_single_instance_mutex():
@@ -397,7 +558,12 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Hide KakaoTalk PC ad windows.")
     parser.add_argument("--debug", action="store_true", help="Print detected windows.")
     parser.add_argument("--once", action="store_true", help="Scan once and exit.")
-    parser.add_argument("--interval", type=float, default=0.5, help="Scan interval in seconds.")
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=DEFAULT_SCAN_INTERVAL,
+        help="Scan interval in seconds.",
+    )
     return parser.parse_args()
 
 
@@ -412,13 +578,20 @@ def main():
     if args.debug:
         print("KakaoTalk Perfect AdBlocker started...")
 
+    hooks = []
+    event_proc = None
     try:
+        if not args.once:
+            hooks, event_proc = install_event_hooks(args.debug)
+
         while True:
             scan_once(debug=args.debug)
             if args.once:
                 break
-            time.sleep(max(args.interval, 0.1))
+            sleep_with_event_pump(max(args.interval, 0.05))
     finally:
+        uninstall_event_hooks(hooks)
+        event_proc = None
         kernel32.CloseHandle(mutex)
 
     return 0
