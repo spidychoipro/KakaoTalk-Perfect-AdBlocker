@@ -17,6 +17,7 @@ SWP_NOSIZE = 0x0001
 SWP_NOZORDER = 0x0004
 SWP_NOACTIVATE = 0x0010
 SWP_HIDEWINDOW = 0x0080
+SWP_NOOWNERZORDER = 0x0200
 WM_CLOSE = 0x0010
 
 EVENT_SYSTEM_FOREGROUND = 0x0003
@@ -116,6 +117,10 @@ user32.IsWindowVisible.argtypes = (wintypes.HWND,)
 user32.IsWindowVisible.restype = wintypes.BOOL
 user32.GetWindowThreadProcessId.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
 user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+user32.GetParent.argtypes = (wintypes.HWND,)
+user32.GetParent.restype = wintypes.HWND
+user32.ScreenToClient.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.POINT))
+user32.ScreenToClient.restype = wintypes.BOOL
 user32.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
 user32.ShowWindow.restype = wintypes.BOOL
 user32.PostMessageW.argtypes = (
@@ -159,6 +164,14 @@ user32.TranslateMessage.argtypes = (ctypes.POINTER(MSG),)
 user32.TranslateMessage.restype = wintypes.BOOL
 user32.DispatchMessageW.argtypes = (ctypes.POINTER(MSG),)
 user32.DispatchMessageW.restype = wintypes.LPARAM
+user32.InvalidateRect.argtypes = (
+    wintypes.HWND,
+    ctypes.POINTER(RECT),
+    wintypes.BOOL,
+)
+user32.InvalidateRect.restype = wintypes.BOOL
+user32.UpdateWindow.argtypes = (wintypes.HWND,)
+user32.UpdateWindow.restype = wintypes.BOOL
 user32.MonitorFromWindow.argtypes = (wintypes.HWND, wintypes.DWORD)
 user32.MonitorFromWindow.restype = wintypes.HMONITOR
 user32.GetMonitorInfoW.argtypes = (wintypes.HMONITOR, ctypes.POINTER(MONITORINFO))
@@ -350,6 +363,31 @@ def overlap_width(a, b):
     return max(0, min(a.right, b.right) - max(a.left, b.left))
 
 
+def screen_to_client(parent_hwnd, left, top):
+    point = wintypes.POINT(left, top)
+    if not user32.ScreenToClient(parent_hwnd, ctypes.byref(point)):
+        return 0, 0
+    return point.x, point.y
+
+
+def set_child_window_rect(info, parent_hwnd, left, top, width, height):
+    x, y = screen_to_client(parent_hwnd, left, top)
+    return user32.SetWindowPos(
+        info.hwnd,
+        0,
+        x,
+        y,
+        max(1, int(width)),
+        max(1, int(height)),
+        SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE,
+    )
+
+
+def refresh_window(hwnd):
+    user32.InvalidateRect(hwnd, None, True)
+    user32.UpdateWindow(hwnd)
+
+
 def is_bottom_right_popup_ad(info):
     if not info.visible or not is_kakao_window(info):
         return False
@@ -420,6 +458,80 @@ def is_bottom_banner_ad(info, main):
     return bottom_aligned and lower_half and banner_size and info.height >= 75
 
 
+def is_bottom_ad_slot(info, main):
+    if info.hwnd == main.hwnd:
+        return False
+    if not is_kakao_window(info):
+        return False
+    if has_safe_text(info):
+        return False
+    if info.width < 180 or info.height < 50:
+        return False
+
+    horizontal_overlap = overlap_width(info, main)
+    if horizontal_overlap < min(info.width, main.width) * 0.70:
+        return False
+
+    bottom_gap = main.bottom - info.bottom
+    top_offset = info.top - main.top
+    width_ratio = info.width / max(main.width, 1)
+    height_ratio = info.height / max(main.height, 1)
+
+    return (
+        -32 <= bottom_gap <= 140
+        and top_offset > main.height * 0.45
+        and width_ratio >= 0.62
+        and height_ratio <= 0.35
+    )
+
+
+def should_extend_over_ad_slot(info, main, slot):
+    if info.hwnd in (main.hwnd, slot.hwnd):
+        return False
+    if not is_kakao_window(info):
+        return False
+    if not info.visible:
+        return False
+    if info.width < 180 or info.height < main.height * 0.25:
+        return False
+    if info.top >= slot.top or info.bottom > slot.top + 36:
+        return False
+    if slot.top - info.bottom > 36:
+        return False
+
+    horizontal_overlap = overlap_width(info, slot)
+    return horizontal_overlap >= min(info.width, slot.width) * 0.55
+
+
+def collapse_bottom_ad_space(main, debug=False):
+    collapsed = 0
+    children = [get_window_info(hwnd) for hwnd in enum_child_windows(main.hwnd)]
+    slots = [child for child in children if is_bottom_ad_slot(child, main)]
+
+    for slot in slots:
+        slot_parent = user32.GetParent(slot.hwnd) or main.hwnd
+        set_child_window_rect(slot, slot_parent, slot.left, main.bottom - 1, slot.width, 1)
+        hide_window(slot, "ad-space", debug)
+        collapsed += 1
+
+        for child in children:
+            if should_extend_over_ad_slot(child, main, slot):
+                child_parent = user32.GetParent(child.hwnd) or main.hwnd
+                new_height = child.height + max(0, slot.bottom - child.bottom)
+                set_child_window_rect(child, child_parent, child.left, child.top, child.width, new_height)
+                collapsed += 1
+                if debug:
+                    print(
+                        f"expanded content: hwnd={child.hwnd:#x} class={child.cls!r} "
+                        f"old_rect={child.rect} new_height={new_height}"
+                    )
+
+    if collapsed:
+        refresh_window(main.hwnd)
+
+    return collapsed
+
+
 def hide_window(info, reason, debug=False, close=False):
     user32.ShowWindow(info.hwnd, SW_HIDE)
     user32.SetWindowPos(
@@ -456,6 +568,7 @@ def scan_once(debug=False):
             if is_bottom_banner_ad(child, main):
                 hide_window(child, "banner", debug)
                 hidden += 1
+        hidden += collapse_bottom_ad_space(main, debug)
 
     if debug and hidden == 0:
         print("no ad windows found")
@@ -475,6 +588,9 @@ def handle_window_event(hwnd, debug=False):
         hide_window(info, "popup-event", debug, close=True)
         return True
 
+    if is_probable_main_window(info):
+        return collapse_bottom_ad_space(info, debug) > 0
+
     main_windows = [
         main
         for main in (get_window_info(parent) for parent in enum_windows())
@@ -483,6 +599,7 @@ def handle_window_event(hwnd, debug=False):
     for main in main_windows:
         if info.hwnd != main.hwnd and is_bottom_banner_ad(info, main):
             hide_window(info, "banner-event", debug)
+            collapse_bottom_ad_space(main, debug)
             return True
 
     return False
